@@ -25,13 +25,25 @@ export class SessionSearch {
 
   private static readonly MISSING_SEARCH_INPUT_MESSAGE = 'Either query or filters required for search';
 
-  constructor(dbPath?: string) {
-    if (!dbPath) {
-      ensureDir(DATA_DIR);
-      dbPath = DB_PATH;
+  /**
+   * Create a SessionSearch instance.
+   *
+   * @param dbOrPath - A Database instance (dependency injection for testing)
+   *                   or a file path string (opens a new connection).
+   *                   When omitted, opens the default DB_PATH.
+   */
+  constructor(dbOrPath?: Database | string) {
+    if (dbOrPath instanceof Database) {
+      // Dependency injection: use provided database instance directly
+      this.db = dbOrPath;
+    } else {
+      const dbPath = dbOrPath ?? DB_PATH;
+      if (!dbOrPath) {
+        ensureDir(DATA_DIR);
+      }
+      this.db = new Database(dbPath);
+      this.db.run('PRAGMA journal_mode = WAL');
     }
-    this.db = new Database(dbPath);
-    this.db.run('PRAGMA journal_mode = WAL');
 
     // Ensure FTS tables exist
     this.ensureFTSTables();
@@ -304,6 +316,60 @@ export class SessionSearch {
     // This method only supports filter-only queries (query=undefined)
     logger.warn('DB', 'Text search not supported - use ChromaDB for vector search');
     return [];
+  }
+
+  /**
+   * FTS5 keyword search on observations
+   *
+   * Returns observation IDs ranked by FTS5 relevance (bm25).
+   * Used alongside ChromaDB for RRF hybrid fusion (spec 003).
+   * Falls back gracefully if FTS5 tables don't exist.
+   */
+  searchObservationsFTS5(
+    query: string,
+    options: { limit?: number; project?: string } = {}
+  ): { id: number; score: number }[] {
+    const { limit = 50, project } = options;
+
+    try {
+      // Check FTS table exists
+      const table = this.db.prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='observations_fts'"
+      ).get() as TableNameRow | null;
+
+      if (!table) {
+        logger.debug('SEARCH', 'FTS5 table not available, skipping keyword search');
+        return [];
+      }
+
+      // FTS5 MATCH query with bm25 ranking
+      // Negative rank because FTS5 rank is negative (lower = better)
+      const params: any[] = [query];
+      let projectClause = '';
+
+      if (project) {
+        projectClause = 'AND o.project = ?';
+        params.push(project);
+      }
+
+      params.push(limit);
+
+      const sql = `
+        SELECT o.id, -fts.rank AS score
+        FROM observations_fts fts
+        JOIN observations o ON o.id = fts.rowid
+        WHERE observations_fts MATCH ?
+        ${projectClause}
+        ORDER BY fts.rank
+        LIMIT ?
+      `;
+
+      return this.db.prepare(sql).all(...params) as { id: number; score: number }[];
+    } catch (error) {
+      // Non-fatal: FTS5 may be unavailable on some platforms
+      logger.debug('SEARCH', 'FTS5 search failed, skipping', {}, error as Error);
+      return [];
+    }
   }
 
   /**
