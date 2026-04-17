@@ -1,31 +1,6 @@
 import { describe, it, expect } from 'bun:test';
-import { jaccardSimilarity, dedupResults } from '../../../src/services/worker/search/dedup.js';
+import { dedupResults } from '../../../src/services/worker/search/dedup.js';
 import type { DedupableResult } from '../../../src/services/worker/search/dedup.js';
-
-describe('jaccardSimilarity', () => {
-  it('returns 1.0 for identical texts', () => {
-    expect(jaccardSimilarity('hello world foo', 'hello world foo')).toBe(1.0);
-  });
-
-  it('returns 0.0 for completely different texts', () => {
-    expect(jaccardSimilarity('hello world', 'foo bar baz')).toBe(0.0);
-  });
-
-  it('returns correct similarity for partially overlapping texts', () => {
-    const sim = jaccardSimilarity(
-      'fixed authentication bug in login handler',
-      'fixed authentication bug in the login handler code'
-    );
-    // Intersection: {fixed, authentication, bug, in, login, handler} = 6
-    // Union: {fixed, authentication, bug, in, login, handler, the, code} = 8
-    // Jaccard = 6/8 = 0.75
-    expect(sim).toBeCloseTo(0.75, 1);
-  });
-
-  it('returns 0.0 for empty strings', () => {
-    expect(jaccardSimilarity('', '')).toBe(0.0);
-  });
-});
 
 // Helper to create mock results
 function mockResult(overrides: Partial<DedupableResult> & { id: number }): DedupableResult {

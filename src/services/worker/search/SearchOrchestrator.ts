@@ -32,6 +32,8 @@ import type {
 } from './types.js';
 import { logger } from '../../../utils/logger.js';
 import { dedupResults } from './dedup.js';
+import { CompiledSummaryStore } from './compiled-summaries.js';
+import type { CompiledSummarySearchResult } from './types.js';
 // NOTE: rrfFusion is available in ./rrf-fusion.js for future use when
 // the strategy pattern is refactored to support parallel FTS5+Chroma execution.
 
@@ -50,6 +52,7 @@ export class SearchOrchestrator {
   private hybridStrategy: HybridSearchStrategy | null = null;
   private resultFormatter: ResultFormatter;
   private timelineBuilder: TimelineBuilder;
+  private compiledStore: CompiledSummaryStore | null = null;
 
   constructor(
     private sessionSearch: SessionSearch,
@@ -69,6 +72,13 @@ export class SearchOrchestrator {
   }
 
   /**
+   * Initialize compiled summary store (called after DB is ready)
+   */
+  setCompiledStore(store: CompiledSummaryStore): void {
+    this.compiledStore = store;
+  }
+
+  /**
    * Main search entry point
    */
   async search(args: any): Promise<StrategySearchResult> {
@@ -76,6 +86,34 @@ export class SearchOrchestrator {
 
     // Decision tree for strategy selection
     return await this.executeWithFallback(options);
+  }
+
+  /**
+   * Search compiled summaries first, fall back to observations.
+   * Returns compiled summaries alongside regular results.
+   */
+  async searchWithCompiled(args: any): Promise<StrategySearchResult & {
+    compiledSummaries: CompiledSummarySearchResult[];
+  }> {
+    const options = this.normalizeParams(args);
+    const compiledSummaries: CompiledSummarySearchResult[] = [];
+
+    // Check compiled summaries first (if available and query exists)
+    if (this.compiledStore && options.query) {
+      const compiled = this.compiledStore.searchByText(options.query, {
+        project: options.project,
+        limit: 5,
+      });
+      compiledSummaries.push(...compiled);
+    }
+
+    // Run normal search
+    const result = await this.executeWithFallback(options);
+
+    return {
+      ...result,
+      compiledSummaries,
+    };
   }
 
   /**

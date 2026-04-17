@@ -7,8 +7,12 @@
 // Main orchestrator
 export { SearchOrchestrator } from './SearchOrchestrator.js';
 
+// Compiled summaries
+export { CompiledSummaryStore } from './compiled-summaries.js';
+export type { CompiledSummarySearchOptions } from './compiled-summaries.js';
+
 // Dedup pipeline
-export { dedupResults, jaccardSimilarity } from './dedup.js';
+export { dedupResults } from './dedup.js';
 export type { DedupableResult, DedupOptions } from './dedup.js';
 
 // Formatters

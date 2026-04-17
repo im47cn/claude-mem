@@ -81,6 +81,7 @@ import { OpenRouterAgent, isOpenRouterSelected, isOpenRouterAvailable } from './
 import { PaginationHelper } from './worker/PaginationHelper.js';
 import { SettingsManager } from './worker/SettingsManager.js';
 import { SearchManager } from './worker/SearchManager.js';
+import { CompiledSummaryStore } from './worker/search/compiled-summaries.js';
 import { FormattingService } from './worker/FormattingService.js';
 import { TimelineService } from './worker/TimelineService.js';
 import { SessionEventBroadcaster } from './worker/events/SessionEventBroadcaster.js';
@@ -392,6 +393,10 @@ export class WorkerService {
         formattingService,
         timelineService
       );
+      // Initialize compiled summaries store (GBrain Compiled Truth pattern)
+      const compiledStore = new CompiledSummaryStore(this.dbManager.getSessionStore().db);
+      searchManager.setCompiledStore(compiledStore);
+
       this.searchRoutes = new SearchRoutes(searchManager);
       this.server.registerRoutes(this.searchRoutes);
       logger.info('WORKER', 'SearchManager initialized and search routes registered');

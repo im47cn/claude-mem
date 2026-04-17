@@ -38,29 +38,6 @@ export interface DedupOptions {
 }
 
 /**
- * Compute Jaccard similarity between two texts based on word sets
- *
- * Retained as a utility for future use or external callers,
- * but no longer used in the pipeline (zero hits on real data).
- */
-export function jaccardSimilarity(textA: string, textB: string): number {
-  const wordsA = new Set(textA.toLowerCase().split(/\s+/).filter(Boolean));
-  const wordsB = new Set(textB.toLowerCase().split(/\s+/).filter(Boolean));
-
-  if (wordsA.size === 0 && wordsB.size === 0) return 0.0;
-
-  let intersectionSize = 0;
-  for (const word of wordsA) {
-    if (wordsB.has(word)) intersectionSize++;
-  }
-
-  const unionSize = wordsA.size + wordsB.size - intersectionSize;
-  if (unionSize === 0) return 0.0;
-
-  return intersectionSize / unionSize;
-}
-
-/**
  * Layer 1: Enforce project diversity (no single project > maxRatio of results)
  *
  * Prevents a single dominant project from monopolizing search results

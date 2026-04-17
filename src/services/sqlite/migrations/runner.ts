@@ -37,6 +37,8 @@ export class MigrationRunner {
     this.addSessionCustomTitleColumn();
     this.createObservationFeedbackTable();
     this.addSessionPlatformSourceColumn();
+    this.createCompiledSummariesTable();
+    this.createDreamCycleTables();
   }
 
   /**
@@ -921,5 +923,110 @@ export class MigrationRunner {
     }
 
     this.db.prepare('INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)').run(25, new Date().toISOString());
+  }
+
+  /**
+   * Create compiled_summaries table for synthesized knowledge (migration 26)
+   *
+   * Implements GBrain's "Compiled Truth + Timeline" pattern:
+   * - compiled_text is REWRITTEN (not appended) when new evidence arrives
+   * - observation_ids provides traceability to source observations
+   * - observations table remains unchanged (append-only timeline)
+   */
+  private createCompiledSummariesTable(): void {
+    const applied = this.db.prepare('SELECT version FROM schema_versions WHERE version = ?').get(26) as SchemaVersion | undefined;
+    if (applied) return;
+
+    const tables = this.db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='compiled_summaries'").all() as TableNameRow[];
+    if (tables.length > 0) {
+      this.db.prepare('INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)').run(26, new Date().toISOString());
+      return;
+    }
+
+    logger.debug('DB', 'Creating compiled_summaries table');
+
+    this.db.run(`
+      CREATE TABLE compiled_summaries (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        topic TEXT NOT NULL,
+        entity_type TEXT NOT NULL,
+        compiled_text TEXT NOT NULL,
+        confidence REAL DEFAULT 0.8,
+        observation_ids TEXT NOT NULL,
+        project TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )
+    `);
+
+    this.db.run('CREATE INDEX idx_compiled_topic ON compiled_summaries(topic)');
+    this.db.run('CREATE INDEX idx_compiled_type ON compiled_summaries(entity_type)');
+    this.db.run('CREATE INDEX idx_compiled_project ON compiled_summaries(project)');
+    this.db.run('CREATE INDEX idx_compiled_updated ON compiled_summaries(updated_at)');
+
+    this.db.prepare('INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)').run(26, new Date().toISOString());
+
+    logger.debug('DB', 'compiled_summaries table created successfully');
+  }
+
+  /**
+   * Create dream cycle tracking tables and add demoted column (migration 27)
+   *
+   * Supports the self-managed Dream Cycle (GBrain spec-006):
+   * - dream_cycle_runs: tracks each cycle execution and report
+   * - contradictions: flags conflicting observations for human review
+   * - observations.demoted: lowers search weight without deleting
+   */
+  private createDreamCycleTables(): void {
+    const applied = this.db.prepare('SELECT version FROM schema_versions WHERE version = ?').get(27) as SchemaVersion | undefined;
+    if (applied) return;
+
+    logger.debug('DB', 'Creating dream cycle tables');
+
+    // dream_cycle_runs table
+    const dcTables = this.db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='dream_cycle_runs'").all() as TableNameRow[];
+    if (dcTables.length === 0) {
+      this.db.run(`
+        CREATE TABLE dream_cycle_runs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          started_at INTEGER NOT NULL,
+          completed_at INTEGER,
+          status TEXT NOT NULL DEFAULT 'running',
+          report TEXT,
+          observations_processed INTEGER DEFAULT 0
+        )
+      `);
+      this.db.run('CREATE INDEX idx_dream_cycle_status ON dream_cycle_runs(status)');
+      this.db.run('CREATE INDEX idx_dream_cycle_started ON dream_cycle_runs(started_at DESC)');
+    }
+
+    // contradictions table
+    const ctTables = this.db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='contradictions'").all() as TableNameRow[];
+    if (ctTables.length === 0) {
+      this.db.run(`
+        CREATE TABLE contradictions (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          observation_id_a INTEGER NOT NULL,
+          observation_id_b INTEGER NOT NULL,
+          description TEXT,
+          resolved INTEGER DEFAULT 0,
+          created_at INTEGER NOT NULL,
+          FOREIGN KEY(observation_id_a) REFERENCES observations(id) ON DELETE CASCADE,
+          FOREIGN KEY(observation_id_b) REFERENCES observations(id) ON DELETE CASCADE
+        )
+      `);
+      this.db.run('CREATE INDEX idx_contradictions_resolved ON contradictions(resolved)');
+    }
+
+    // Add demoted column to observations
+    const tableInfo = this.db.query('PRAGMA table_info(observations)').all() as TableColumnInfo[];
+    const hasDemoted = tableInfo.some(col => col.name === 'demoted');
+    if (!hasDemoted) {
+      this.db.run('ALTER TABLE observations ADD COLUMN demoted INTEGER DEFAULT 0');
+      this.db.run('CREATE INDEX IF NOT EXISTS idx_observations_demoted ON observations(demoted)');
+    }
+
+    this.db.prepare('INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)').run(27, new Date().toISOString());
+    logger.debug('DB', 'Dream cycle tables created successfully');
   }
 }
