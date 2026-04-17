@@ -32,10 +32,10 @@ import type {
 } from './types.js';
 import { logger } from '../../../utils/logger.js';
 import { dedupResults } from './dedup.js';
+import { rrfFusion } from './rrf-fusion.js';
+import type { RankedResult } from './rrf-fusion.js';
 import { CompiledSummaryStore } from './compiled-summaries.js';
 import type { CompiledSummarySearchResult } from './types.js';
-// NOTE: rrfFusion is available in ./rrf-fusion.js for future use when
-// the strategy pattern is refactored to support parallel FTS5+Chroma execution.
 
 /**
  * Normalized parameters from URL-friendly format
@@ -117,7 +117,16 @@ export class SearchOrchestrator {
   }
 
   /**
-   * Execute search with dedup post-processing and fallback logic
+   * Execute search with RRF hybrid fusion, dedup, and fallback logic
+   *
+   * When query text is provided and Chroma is available:
+   *   1. Run FTS5 keyword search + Chroma semantic search in parallel
+   *   2. Fuse results via RRF (Reciprocal Rank Fusion)
+   *   3. Hydrate full observation data from SQLite
+   *   4. Apply dedup pipeline
+   *
+   * Graceful degradation: if FTS5 or Chroma fails, the other backend's
+   * results are used alone. Both failing falls back to filter-only SQLite.
    */
   private async executeWithFallback(
     options: NormalizedParams
@@ -130,37 +139,129 @@ export class SearchOrchestrator {
       return result;
     }
 
-    // PATH 2: CHROMA SEMANTIC SEARCH (query text + Chroma available)
+    // PATH 2: HYBRID RRF FUSION (query text + Chroma available)
     if (this.chromaStrategy) {
-      logger.debug('SEARCH', 'Orchestrator: Using Chroma semantic search', {});
-      const result = await this.chromaStrategy.search(options);
+      const limit = options.limit ?? SEARCH_CONSTANTS.DEFAULT_LIMIT;
+      const oversampleLimit = limit * 2; // Oversampling for better RRF candidates
 
-      if (result.usedChroma) {
-        result.results.observations = dedupResults(result.results.observations);
-        return result;
+      // Run FTS5 and Chroma in parallel
+      const [fts5Results, chromaResult] = await Promise.all([
+        Promise.resolve().then(() => {
+          try {
+            return this.sessionSearch.searchObservationsFTS5(options.query!, {
+              limit: oversampleLimit,
+              project: options.project,
+            });
+          } catch {
+            return [] as { id: number; score: number }[];
+          }
+        }),
+        this.chromaStrategy.search({ ...options, limit: oversampleLimit }),
+      ]);
+
+      logger.debug('SEARCH', 'Orchestrator: RRF fusion inputs', {
+        fts5Count: fts5Results.length,
+        chromaCount: chromaResult.results.observations.length,
+        chromaUsed: chromaResult.usedChroma,
+      });
+
+      // Build ranked lists for RRF
+      const fts5Ranked: RankedResult[] = fts5Results.map(r => ({
+        id: r.id,
+        score: r.score,
+        source: 'fts5' as const,
+      }));
+
+      const chromaRanked: RankedResult[] = chromaResult.results.observations.map(obs => ({
+        id: obs.id,
+        score: obs.score ?? 0,
+        source: 'chroma' as const,
+      }));
+
+      // Collect non-empty lists for fusion
+      const rankedLists = [fts5Ranked, chromaRanked].filter(l => l.length > 0);
+
+      if (rankedLists.length > 0) {
+        // Fuse via RRF
+        const fused = rrfFusion(rankedLists);
+        const fusedIds = fused.slice(0, limit).map(r => r.id);
+
+        logger.debug('SEARCH', 'Orchestrator: RRF fused results', {
+          fusedCount: fused.length,
+          returnCount: fusedIds.length,
+          listsUsed: rankedLists.length,
+        });
+
+        // Hydrate full observations from SQLite in fused rank order
+        if (fusedIds.length > 0) {
+          const observations = this.sessionStore.getObservationsByIds(fusedIds, { limit });
+          // Restore RRF rank order
+          observations.sort((a, b) => fusedIds.indexOf(a.id) - fusedIds.indexOf(b.id));
+
+          const dedupedObs = dedupResults(observations);
+
+          return {
+            results: {
+              observations: dedupedObs,
+              sessions: chromaResult.results.sessions,
+              prompts: chromaResult.results.prompts,
+            },
+            usedChroma: chromaResult.usedChroma,
+            fellBack: false,
+            strategy: rankedLists.length > 1 ? 'hybrid' : (fts5Ranked.length > 0 ? 'sqlite' : 'chroma'),
+          };
+        }
       }
 
-      // Chroma failed - fall back to SQLite for filter-only
-      logger.debug('SEARCH', 'Orchestrator: Chroma failed, falling back to SQLite', {});
+      // Both backends returned empty — fall back to filter-only SQLite
+      logger.debug('SEARCH', 'Orchestrator: RRF produced no results, falling back to SQLite', {});
       const fallbackResult = await this.sqliteStrategy.search({
         ...options,
-        query: undefined // Remove query for SQLite fallback
+        query: undefined,
       });
       fallbackResult.results.observations = dedupResults(fallbackResult.results.observations);
 
       return {
         ...fallbackResult,
-        fellBack: true
+        fellBack: true,
       };
     }
 
-    // PATH 3: No Chroma available
-    logger.debug('SEARCH', 'Orchestrator: Chroma not available', {});
+    // PATH 3: No Chroma available — try FTS5 only
+    logger.debug('SEARCH', 'Orchestrator: Chroma not available, trying FTS5 only', {});
+    const limit = options.limit ?? SEARCH_CONSTANTS.DEFAULT_LIMIT;
+
+    try {
+      const fts5Results = this.sessionSearch.searchObservationsFTS5(options.query!, {
+        limit,
+        project: options.project,
+      });
+
+      if (fts5Results.length > 0) {
+        const ids = fts5Results.map(r => r.id);
+        const observations = this.sessionStore.getObservationsByIds(ids, { limit });
+        observations.sort((a, b) => ids.indexOf(a.id) - ids.indexOf(b.id));
+
+        return {
+          results: {
+            observations: dedupResults(observations),
+            sessions: [],
+            prompts: [],
+          },
+          usedChroma: false,
+          fellBack: false,
+          strategy: 'sqlite',
+        };
+      }
+    } catch {
+      // FTS5 not available either
+    }
+
     return {
       results: { observations: [], sessions: [], prompts: [] },
       usedChroma: false,
       fellBack: false,
-      strategy: 'sqlite'
+      strategy: 'sqlite',
     };
   }
 
