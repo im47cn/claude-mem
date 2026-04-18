@@ -149,10 +149,7 @@ export function createLLMProvider(): LLMProvider | null {
 
   switch (provider) {
     case 'gemini': {
-      const apiKey = settings.CLAUDE_MEM_GEMINI_API_KEY
-        || getCredential('GEMINI_API_KEY')
-        || process.env.GEMINI_API_KEY
-        || '';
+      const apiKey = settings.CLAUDE_MEM_GEMINI_API_KEY || getCredential('GEMINI_API_KEY') || '';
       if (!apiKey) {
         logger.info('SYNTH', 'No Gemini API key configured, synthesizer unavailable');
         return null;
@@ -162,10 +159,7 @@ export function createLLMProvider(): LLMProvider | null {
     }
 
     case 'openrouter': {
-      const apiKey = settings.CLAUDE_MEM_OPENROUTER_API_KEY
-        || getCredential('OPENROUTER_API_KEY')
-        || process.env.OPENROUTER_API_KEY
-        || '';
+      const apiKey = settings.CLAUDE_MEM_OPENROUTER_API_KEY || getCredential('OPENROUTER_API_KEY') || '';
       if (!apiKey) {
         logger.info('SYNTH', 'No OpenRouter API key configured, synthesizer unavailable');
         return null;
@@ -175,15 +169,7 @@ export function createLLMProvider(): LLMProvider | null {
     }
 
     case 'claude': {
-      // Resolution order:
-      // 1. Explicit claude-mem settings key (highest priority, user-intentional)
-      // 2. ~/.claude-mem/.env managed credential
-      // 3. process.env.ANTHROPIC_API_KEY — available in the Worker process itself
-      //    (BLOCKED_ENV_VARS only strips this from spawned subprocesses, not the worker)
-      const apiKey = settings.CLAUDE_MEM_ANTHROPIC_API_KEY
-        || getCredential('ANTHROPIC_API_KEY')
-        || process.env.ANTHROPIC_API_KEY
-        || '';
+      const apiKey = settings.CLAUDE_MEM_ANTHROPIC_API_KEY || getCredential('ANTHROPIC_API_KEY') || '';
       if (!apiKey) {
         logger.info('SYNTH', 'No Anthropic API key configured, synthesizer unavailable');
         return null;
@@ -194,10 +180,7 @@ export function createLLMProvider(): LLMProvider | null {
 
     default: {
       logger.warn('SYNTH', `Unknown provider "${provider}", trying Gemini fallback`);
-      const apiKey = settings.CLAUDE_MEM_GEMINI_API_KEY
-        || getCredential('GEMINI_API_KEY')
-        || process.env.GEMINI_API_KEY
-        || '';
+      const apiKey = settings.CLAUDE_MEM_GEMINI_API_KEY || getCredential('GEMINI_API_KEY') || '';
       if (!apiKey) return null;
       return new GeminiLLMProvider(apiKey);
     }
