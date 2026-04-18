@@ -934,11 +934,11 @@ export class MigrationRunner {
    * - observations table remains unchanged (append-only timeline)
    */
   private createCompiledSummariesTable(): void {
-    const applied = this.db.prepare('SELECT version FROM schema_versions WHERE version = ?').get(26) as SchemaVersion | undefined;
-    if (applied) return;
-
+    // Always check table existence first — version record may be marked applied
+    // even if the table was never created (e.g. schema_versions state mismatch).
     const tables = this.db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='compiled_summaries'").all() as TableNameRow[];
     if (tables.length > 0) {
+      // Table already exists — ensure version is recorded and exit
       this.db.prepare('INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)').run(26, new Date().toISOString());
       return;
     }
@@ -978,8 +978,15 @@ export class MigrationRunner {
    * - observations.demoted: lowers search weight without deleting
    */
   private createDreamCycleTables(): void {
-    const applied = this.db.prepare('SELECT version FROM schema_versions WHERE version = ?').get(27) as SchemaVersion | undefined;
-    if (applied) return;
+    // Always check table existence first — version record may be marked applied
+    // even if the table was never created (e.g. schema_versions state mismatch).
+    const dcCheck = this.db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='dream_cycle_runs'").all() as TableNameRow[];
+    const allTablesExist = dcCheck.length > 0;
+    if (allTablesExist) {
+      // Tables already exist — ensure version is recorded and exit
+      this.db.prepare('INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)').run(27, new Date().toISOString());
+      return;
+    }
 
     logger.debug('DB', 'Creating dream cycle tables');
 
