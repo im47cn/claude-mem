@@ -2,7 +2,7 @@
 
 ## Priority: P0 | Value: High | Difficulty: Medium
 
-## Status: IN PROGRESS (Core Complete)
+## Status: COMPLETE (All Triggers Implemented)
 
 ## Problem Statement
 
@@ -173,6 +173,7 @@ The Compiled Truth pattern is implemented as three independent layers:
 | `src/services/worker/SearchManager.ts` | Compiled summaries in search output |
 | `src/services/worker/dream/compiler.ts` | Dream Cycle Phase 2: bridges Synthesizer into pipeline |
 | `src/services/worker/dream/threshold-trigger.ts` | Threshold-based auto-compilation trigger with debounce |
+| `src/services/worker/http/routes/SynthesizeRoutes.ts` | Manual API: POST /api/synthesize + GET status |
 | `src/services/sqlite/migrations/runner.ts` | Migration 26: compiled_summaries table |
 
 ### Synthesizer Design
@@ -197,8 +198,8 @@ The Synthesizer is a standalone component. It needs callers to trigger it:
 |---------|--------|-------------|
 | Dream Cycle Phase 2 | **Connected** | `compiler.ts` bridges Synthesizer into Dream Cycle via `compileClusters()` with DI support |
 | Threshold-based | **Implemented** | `ThresholdTrigger` auto-compiles when 5+ observations cluster; debounced (30s), integrated via WorkerRef |
-| Time-based | Not implemented | Run compilation sweep every 6 hours in worker |
-| Manual API | Not implemented | `POST /synthesize` endpoint for manual triggering |
+| Time-based | **Implemented** | 6-hour `setInterval` in worker-service runs full Dream Cycle; skips if <10 new observations |
+| Manual API | **Implemented** | `POST /api/synthesize` + `GET /api/synthesize/status` via `SynthesizeRoutes`; 409 on concurrent runs |
 
 ## Acceptance Criteria
 
@@ -264,3 +265,10 @@ File: `tests/worker/dream/threshold-trigger.test.ts` (9 tests)
 - Debounce behavior verification
 - Dispose cancels pending checks
 - Custom threshold value
+
+### DreamCycleRunner (Manual API)
+File: `tests/worker/dream/synthesize-routes.test.ts` (8 tests)
+- Status query methods (isRunning, getLastRun, getLastDreamCycleTime)
+- Observation counting (empty database, with observations)
+- Demoted observation filtering in counts
+- Dream cycle run tracking in database
