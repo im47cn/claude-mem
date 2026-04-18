@@ -151,3 +151,15 @@ export interface CompiledSummarySearchResult extends CompiledSummaryRow {
   observation_count: number;
   score?: number;
 }
+
+/**
+ * Result from the Synthesizer - ready for CompiledSummaryStore.upsert()
+ */
+export interface SynthesizerResult {
+  compiled_text: string;
+  confidence: number;
+  observation_ids: number[];
+  topic: string;
+  entity_type: CompiledSummaryRow['entity_type'];
+  project?: string;
+}
