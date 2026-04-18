@@ -82,6 +82,7 @@ import { PaginationHelper } from './worker/PaginationHelper.js';
 import { SettingsManager } from './worker/SettingsManager.js';
 import { SearchManager } from './worker/SearchManager.js';
 import { CompiledSummaryStore } from './worker/search/compiled-summaries.js';
+import { ThresholdTrigger } from './worker/dream/threshold-trigger.js';
 import { FormattingService } from './worker/FormattingService.js';
 import { TimelineService } from './worker/TimelineService.js';
 import { SessionEventBroadcaster } from './worker/events/SessionEventBroadcaster.js';
@@ -151,6 +152,7 @@ export class WorkerService {
   private settingsManager: SettingsManager;
   private sessionEventBroadcaster: SessionEventBroadcaster;
   private corpusStore: CorpusStore;
+  private thresholdTrigger: ThresholdTrigger | null = null;
 
   // Route handlers
   private searchRoutes: SearchRoutes | null = null;
@@ -302,7 +304,7 @@ export class WorkerService {
     this.server.registerRoutes(new DataRoutes(this.paginationHelper, this.dbManager, this.sessionManager, this.sseBroadcaster, this, this.startTime));
     this.server.registerRoutes(new SettingsRoutes(this.settingsManager));
     this.server.registerRoutes(new LogsRoutes());
-    this.server.registerRoutes(new MemoryRoutes(this.dbManager, 'claude-mem'));
+    this.server.registerRoutes(new MemoryRoutes(this.dbManager, 'claude-mem', () => this.thresholdTrigger?.notify()));
   }
 
   /**
@@ -396,6 +398,10 @@ export class WorkerService {
       // Initialize compiled summaries store (GBrain Compiled Truth pattern)
       const compiledStore = new CompiledSummaryStore(this.dbManager.getSessionStore().db);
       searchManager.setCompiledStore(compiledStore);
+
+      // Initialize threshold-based compilation trigger
+      this.thresholdTrigger = new ThresholdTrigger(this.dbManager.getSessionStore().db);
+      logger.info('WORKER', 'ThresholdTrigger initialized (auto-compile when 5+ observations cluster)');
 
       this.searchRoutes = new SearchRoutes(searchManager);
       this.server.registerRoutes(this.searchRoutes);
@@ -982,6 +988,12 @@ export class WorkerService {
       this.staleSessionReaperInterval = null;
     }
 
+    // Dispose threshold trigger (cancel pending debounced checks)
+    if (this.thresholdTrigger) {
+      this.thresholdTrigger.dispose();
+      this.thresholdTrigger = null;
+    }
+
     await performGracefulShutdown({
       server: this.server.getHttpServer(),
       sessionManager: this.sessionManager,
@@ -994,6 +1006,14 @@ export class WorkerService {
   /**
    * Broadcast processing status change to SSE clients
    */
+  /**
+   * Notify the threshold-based compilation trigger after observations are stored.
+   * Called by ResponseProcessor via the WorkerRef interface.
+   */
+  notifyThresholdTrigger(): void {
+    this.thresholdTrigger?.notify();
+  }
+
   broadcastProcessingStatus(): void {
     const queueDepth = this.sessionManager.getTotalActiveWork();
     const isProcessing = queueDepth > 0;
