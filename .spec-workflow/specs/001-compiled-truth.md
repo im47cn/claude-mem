@@ -171,6 +171,7 @@ The Compiled Truth pattern is implemented as three independent layers:
 | `src/services/worker/search/types.ts` | CompiledSummaryRow, CompiledSummaryInput, SynthesizerResult |
 | `src/services/worker/search/SearchOrchestrator.ts` | searchWithCompiled() integration |
 | `src/services/worker/SearchManager.ts` | Compiled summaries in search output |
+| `src/services/worker/dream/compiler.ts` | Dream Cycle Phase 2: bridges Synthesizer into pipeline |
 | `src/services/sqlite/migrations/runner.ts` | Migration 26: compiled_summaries table |
 
 ### Synthesizer Design
@@ -193,7 +194,7 @@ The Synthesizer is a standalone component. It needs callers to trigger it:
 
 | Trigger | Status | Description |
 |---------|--------|-------------|
-| Dream Cycle Phase 2 | Not connected | `DreamCycleRunner.compileClusters()` should call `synthesizer.synthesizeBatch()` |
+| Dream Cycle Phase 2 | **Connected** | `compiler.ts` bridges Synthesizer into Dream Cycle via `compileClusters()` with DI support |
 | Threshold-based | Not implemented | Auto-trigger when 5+ observations share a topic cluster |
 | Time-based | Not implemented | Run compilation sweep every 6 hours in worker |
 | Manual API | Not implemented | `POST /synthesize` endpoint for manual triggering |
@@ -241,3 +242,12 @@ File: `tests/worker/search/synthesizer-prompts.test.ts` (7 tests)
 - User prompt: topic, entityType, project, observations formatting
 - CREATE vs REWRITE mode prompt paths
 - Null field handling in observations
+
+### Dream Cycle Compiler
+File: `tests/worker/dream/compiler.test.ts` (6 tests)
+- Create new compiled summaries from clusters
+- Update existing summaries (REWRITE mode)
+- Skipped clusters on LLM failure
+- Graceful degradation with no LLM provider
+- Empty clusters array handling
+- Mixed create/update reporting
