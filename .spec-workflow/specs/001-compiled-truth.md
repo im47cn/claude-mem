@@ -172,6 +172,7 @@ The Compiled Truth pattern is implemented as three independent layers:
 | `src/services/worker/search/SearchOrchestrator.ts` | searchWithCompiled() integration |
 | `src/services/worker/SearchManager.ts` | Compiled summaries in search output |
 | `src/services/worker/dream/compiler.ts` | Dream Cycle Phase 2: bridges Synthesizer into pipeline |
+| `src/services/worker/dream/threshold-trigger.ts` | Threshold-based auto-compilation trigger with debounce |
 | `src/services/sqlite/migrations/runner.ts` | Migration 26: compiled_summaries table |
 
 ### Synthesizer Design
@@ -195,7 +196,7 @@ The Synthesizer is a standalone component. It needs callers to trigger it:
 | Trigger | Status | Description |
 |---------|--------|-------------|
 | Dream Cycle Phase 2 | **Connected** | `compiler.ts` bridges Synthesizer into Dream Cycle via `compileClusters()` with DI support |
-| Threshold-based | Not implemented | Auto-trigger when 5+ observations share a topic cluster |
+| Threshold-based | **Implemented** | `ThresholdTrigger` auto-compiles when 5+ observations cluster; debounced (30s), integrated via WorkerRef |
 | Time-based | Not implemented | Run compilation sweep every 6 hours in worker |
 | Manual API | Not implemented | `POST /synthesize` endpoint for manual triggering |
 
@@ -251,3 +252,15 @@ File: `tests/worker/dream/compiler.test.ts` (6 tests)
 - Graceful degradation with no LLM provider
 - Empty clusters array handling
 - Mixed create/update reporting
+
+### Threshold Trigger
+File: `tests/worker/dream/threshold-trigger.test.ts` (9 tests)
+- Below-threshold observation count skip
+- No qualifying clusters skip
+- End-to-end pipeline (cluster + compile attempt)
+- Concurrency guard (no parallel runs)
+- Empty database graceful handling
+- Demoted observation filtering
+- Debounce behavior verification
+- Dispose cancels pending checks
+- Custom threshold value
