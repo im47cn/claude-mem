@@ -17,6 +17,8 @@
  *   2. Session cap — max N results per session in final output
  */
 
+import { logger } from '../../../../utils/logger.js';
+
 /**
  * Minimum interface for a dedupable search result
  */

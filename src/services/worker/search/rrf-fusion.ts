@@ -10,6 +10,8 @@
  * completely different scales. RRF makes fusion trivial.
  */
 
+import { logger } from '../../../../utils/logger.js';
+
 export interface RankedResult {
   /** Unique identifier (observation ID) */
   id: number;

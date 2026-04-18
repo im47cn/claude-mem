@@ -10,6 +10,7 @@ import { BaseRouteHandler } from '../BaseRouteHandler.js';
 import { CorpusStore } from '../../knowledge/CorpusStore.js';
 import { CorpusBuilder } from '../../knowledge/CorpusBuilder.js';
 import { KnowledgeAgent } from '../../knowledge/KnowledgeAgent.js';
+import { logger } from '../../../../utils/logger.js';
 import type { CorpusFilter } from '../../knowledge/types.js';
 
 export class CorpusRoutes extends BaseRouteHandler {

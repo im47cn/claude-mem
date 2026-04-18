@@ -24,6 +24,8 @@ const EXCLUDED_PATTERNS = [
   /\.d\.ts$/,            // Type declaration files
   /^ui\//,               // UI components (separate logging context)
   /^bin\//,              // CLI utilities (may use console.log for output)
+  /^npx-cli\//,          // NPX CLI commands (user-facing interactive output)
+  /McpIntegrations\.ts$/, // MCP integration installers (user-facing installation output)
   /index\.ts$/,          // Re-export files
   /logger\.ts$/,         // Logger itself
   /hook-response\.ts$/,  // Pure data structure

@@ -3,6 +3,7 @@
  * Isolated from business logic for easy iteration and testing.
  */
 
+import { logger } from '../../../../utils/logger.js';
 import type { ObservationForClustering } from '../../worker/dream/types.js';
 
 /**
