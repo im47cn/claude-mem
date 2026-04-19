@@ -100,6 +100,7 @@ import { LogsRoutes } from './worker/http/routes/LogsRoutes.js';
 import { MemoryRoutes } from './worker/http/routes/MemoryRoutes.js';
 import { CorpusRoutes } from './worker/http/routes/CorpusRoutes.js';
 import { SynthesizeRoutes } from './worker/http/routes/SynthesizeRoutes.js';
+import { CompiledRoutes } from './worker/http/routes/CompiledRoutes.js';
 
 // Knowledge agent services
 import { CorpusStore } from './worker/knowledge/CorpusStore.js';
@@ -436,6 +437,10 @@ export class WorkerService {
       // Register manual synthesis API endpoint
       this.server.registerRoutes(new SynthesizeRoutes(this.dreamCycleRunner));
       logger.info('WORKER', 'SynthesizeRoutes registered (POST /api/synthesize)');
+
+      // Register compiled summaries API endpoints
+      this.server.registerRoutes(new CompiledRoutes(() => this.dbManager.getSessionStore().db));
+      logger.info('WORKER', 'CompiledRoutes registered (GET/POST /api/compiled-summaries)');
 
       this.searchRoutes = new SearchRoutes(searchManager);
       this.server.registerRoutes(this.searchRoutes);

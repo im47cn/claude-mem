@@ -39,6 +39,7 @@ export class MigrationRunner {
     this.addSessionPlatformSourceColumn();
     this.createCompiledSummariesTable();
     this.createDreamCycleTables();
+    this.addCompiledSummariesColumns();
   }
 
   /**
@@ -1035,5 +1036,29 @@ export class MigrationRunner {
 
     this.db.prepare('INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)').run(27, new Date().toISOString());
     logger.debug('DB', 'Dream cycle tables created successfully');
+  }
+
+  /**
+   * Add is_stale and observation_count columns to compiled_summaries (migration 28)
+   *
+   * Supports the sqlite/compiled-summaries/ module:
+   * - is_stale: marks summaries needing recompilation when new observations arrive
+   * - observation_count: cached count for quick stats without JSON parsing
+   */
+  private addCompiledSummariesColumns(): void {
+    const tableInfo = this.db.query("PRAGMA table_info(compiled_summaries)").all() as TableColumnInfo[];
+    const columnNames = new Set(tableInfo.map((col) => col.name));
+
+    if (!columnNames.has('is_stale')) {
+      this.db.run('ALTER TABLE compiled_summaries ADD COLUMN is_stale INTEGER DEFAULT 0');
+      this.db.run('CREATE INDEX IF NOT EXISTS idx_compiled_stale ON compiled_summaries(is_stale)');
+    }
+
+    if (!columnNames.has('observation_count')) {
+      this.db.run('ALTER TABLE compiled_summaries ADD COLUMN observation_count INTEGER DEFAULT 0');
+    }
+
+    this.db.prepare('INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)').run(28, new Date().toISOString());
+    logger.debug('DB', 'compiled_summaries columns (is_stale, observation_count) ensured');
   }
 }

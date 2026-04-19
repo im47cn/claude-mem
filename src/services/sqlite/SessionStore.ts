@@ -65,6 +65,7 @@ export class SessionStore {
     this.addSessionCustomTitleColumn();
     this.addSessionPlatformSourceColumn();
     this.addObservationModelColumns();
+    this.addCompiledSummariesColumns();
   }
 
   /**
@@ -943,6 +944,21 @@ export class SessionStore {
 
     this.db.prepare('INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)').run(26, new Date().toISOString());
   }
+  private addCompiledSummariesColumns(): void {
+    const tableInfo = this.db.query('PRAGMA table_info(compiled_summaries)').all() as TableColumnInfo[];
+    if (tableInfo.length === 0) return; // Table doesn't exist yet, skip
+
+    const columnNames = new Set(tableInfo.map((col) => col.name));
+
+    if (!columnNames.has('is_stale')) {
+      this.db.run('ALTER TABLE compiled_summaries ADD COLUMN is_stale INTEGER DEFAULT 0');
+      this.db.run('CREATE INDEX IF NOT EXISTS idx_compiled_stale ON compiled_summaries(is_stale)');
+    }
+    if (!columnNames.has('observation_count')) {
+      this.db.run('ALTER TABLE compiled_summaries ADD COLUMN observation_count INTEGER DEFAULT 0');
+    }
+  }
+
 
   /**
    * Update the memory session ID for a session
