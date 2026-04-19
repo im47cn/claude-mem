@@ -44,12 +44,14 @@ export class CompiledSummaryStore {
       this.db.query(
         `UPDATE compiled_summaries
          SET compiled_text = ?, confidence = ?, observation_ids = ?,
-             entity_type = ?, project = ?, updated_at = ?
+             observation_count = ?, entity_type = ?, project = ?,
+             updated_at = ?, is_stale = 0
          WHERE id = ?`
       ).run(
         input.compiled_text,
         confidence,
         observationIdsJson,
+        input.observation_ids.length,
         input.entity_type,
         input.project ?? null,
         now,
@@ -63,14 +65,15 @@ export class CompiledSummaryStore {
     const result = this.db.query(
       `INSERT INTO compiled_summaries
        (topic, entity_type, compiled_text, confidence, observation_ids,
-        project, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        observation_count, project, created_at, updated_at, is_stale)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`
     ).run(
       input.topic,
       input.entity_type,
       input.compiled_text,
       confidence,
       observationIdsJson,
+      input.observation_ids.length,
       input.project ?? null,
       now,
       now

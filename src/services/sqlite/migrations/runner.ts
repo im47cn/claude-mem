@@ -1058,7 +1058,13 @@ export class MigrationRunner {
       this.db.run('ALTER TABLE compiled_summaries ADD COLUMN observation_count INTEGER DEFAULT 0');
     }
 
+    // Create FTS5 virtual table for full-text search (idempotent)
+    this.db.run(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS compiled_summaries_fts
+      USING fts5(topic, compiled_text, content=compiled_summaries, content_rowid=id)
+    `);
+
     this.db.prepare('INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)').run(28, new Date().toISOString());
-    logger.debug('DB', 'compiled_summaries columns (is_stale, observation_count) ensured');
+    logger.debug('DB', 'compiled_summaries columns (is_stale, observation_count) and FTS5 index ensured');
   }
 }

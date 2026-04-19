@@ -17,7 +17,9 @@ function createCompiledSummariesTable(db: Database): void {
       compiled_text TEXT NOT NULL,
       confidence REAL DEFAULT 0.8,
       observation_ids TEXT NOT NULL,
+      observation_count INTEGER DEFAULT 0,
       project TEXT,
+      is_stale INTEGER DEFAULT 0,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );
@@ -25,6 +27,7 @@ function createCompiledSummariesTable(db: Database): void {
     CREATE INDEX idx_compiled_type ON compiled_summaries(entity_type);
     CREATE INDEX idx_compiled_project ON compiled_summaries(project);
     CREATE INDEX idx_compiled_updated ON compiled_summaries(updated_at);
+    CREATE INDEX idx_compiled_stale ON compiled_summaries(is_stale);
   `);
 }
 

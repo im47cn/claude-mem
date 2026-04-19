@@ -58,6 +58,7 @@ export function searchCompiledSummaries(
     db.prepare("SELECT 1 FROM compiled_summaries_fts LIMIT 1").get();
   } catch {
     // FTS5 not available, fall back to LIKE search
+    logger.debug('COMPILED', 'compiled_summaries_fts not found, falling back to LIKE search');
     return searchCompiledSummariesLike(db, query, options);
   }
 

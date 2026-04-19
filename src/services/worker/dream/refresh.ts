@@ -13,29 +13,40 @@ import type { RefreshReport } from './types.js';
 import { logger } from '../../../utils/logger.js';
 
 /**
- * Rebuild FTS5 index by running the rebuild command
- * This is a SQLite built-in operation — no API cost
+ * Rebuild a single FTS5 table if it exists.
+ * Returns true if the rebuild ran successfully.
  */
-function rebuildFTS5(db: Database): boolean {
+function rebuildFTS5Table(db: Database, tableName: string): boolean {
   try {
-    // Check if observations_fts table exists
     const ftsExists = db.query<{ name: string }, []>(
-      `SELECT name FROM sqlite_master WHERE type='table' AND name='observations_fts'`
-    ).get();
+      `SELECT name FROM sqlite_master WHERE type='table' AND name=?`
+    ).get(tableName);
 
-    if (!ftsExists) {
-      logger.debug('DREAM', 'No FTS5 table found, skipping rebuild');
-      return false;
-    }
+    if (!ftsExists) return false;
 
-    // FTS5 rebuild command
-    db.query(`INSERT INTO observations_fts(observations_fts) VALUES('rebuild')`).run();
-    logger.info('DREAM', 'FTS5 index rebuilt successfully');
+    db.query(`INSERT INTO ${tableName}(${tableName}) VALUES('rebuild')`).run();
+    logger.debug('DREAM', `FTS5 index rebuilt: ${tableName}`);
     return true;
   } catch (error) {
-    logger.error('DREAM', 'FTS5 rebuild failed', {}, error as Error);
+    logger.error('DREAM', `FTS5 rebuild failed: ${tableName}`, {}, error as Error);
     return false;
   }
+}
+
+/**
+ * Rebuild all FTS5 indexes: observations_fts and compiled_summaries_fts
+ */
+function rebuildFTS5(db: Database): boolean {
+  const obsOk = rebuildFTS5Table(db, 'observations_fts');
+  const compiledOk = rebuildFTS5Table(db, 'compiled_summaries_fts');
+
+  if (obsOk || compiledOk) {
+    logger.info('DREAM', `FTS5 indexes rebuilt: observations=${obsOk} compiled=${compiledOk}`);
+  } else {
+    logger.debug('DREAM', 'No FTS5 tables found, skipping rebuild');
+  }
+
+  return obsOk || compiledOk;
 }
 
 /**

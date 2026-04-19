@@ -957,6 +957,12 @@ export class SessionStore {
     if (!columnNames.has('observation_count')) {
       this.db.run('ALTER TABLE compiled_summaries ADD COLUMN observation_count INTEGER DEFAULT 0');
     }
+
+    // Create FTS5 virtual table for full-text search (idempotent)
+    this.db.run(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS compiled_summaries_fts
+      USING fts5(topic, compiled_text, content=compiled_summaries, content_rowid=id)
+    `);
   }
 
 
