@@ -49,7 +49,13 @@ export class GeminiLLMProvider implements LLMProvider {
 
     if (!response.ok) {
       const error = await response.text();
-      logger.warn('SYNTH', `Gemini API error: ${response.status}`, { error });
+      // 401/403 = credential problem (won't self-resolve) → error; other failures → warn
+      const isCredentialError = response.status === 401 || response.status === 403;
+      if (isCredentialError) {
+        logger.error('SYNTH', `Gemini API credential error: ${response.status} — check GEMINI_API_KEY in ~/.claude-mem/.env`, { error });
+      } else {
+        logger.warn('SYNTH', `Gemini API error: ${response.status}`, { error });
+      }
       return null;
     }
 
@@ -91,7 +97,12 @@ export class OpenRouterLLMProvider implements LLMProvider {
 
     if (!response.ok) {
       const error = await response.text();
-      logger.warn('SYNTH', `OpenRouter API error: ${response.status}`, { error });
+      const isCredentialError = response.status === 401 || response.status === 403;
+      if (isCredentialError) {
+        logger.error('SYNTH', `OpenRouter API credential error: ${response.status} — check OPENROUTER_API_KEY in ~/.claude-mem/.env`, { error });
+      } else {
+        logger.warn('SYNTH', `OpenRouter API error: ${response.status}`, { error });
+      }
       return null;
     }
 
@@ -130,7 +141,12 @@ export class ClaudeLLMProvider implements LLMProvider {
 
     if (!response.ok) {
       const error = await response.text();
-      logger.warn('SYNTH', `Claude API error: ${response.status}`, { error });
+      const isCredentialError = response.status === 401 || response.status === 403;
+      if (isCredentialError) {
+        logger.error('SYNTH', `Claude API credential error: ${response.status} — check ANTHROPIC_API_KEY in ~/.claude-mem/.env`, { error });
+      } else {
+        logger.warn('SYNTH', `Claude API error: ${response.status}`, { error });
+      }
       return null;
     }
 

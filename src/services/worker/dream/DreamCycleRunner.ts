@@ -175,7 +175,11 @@ export class DreamCycleRunner {
       logger.error('DREAM', 'Dream cycle failed', {}, error as Error);
     } finally {
       this.running = false;
-      this.recordComplete(runId, report);
+      try {
+        this.recordComplete(runId, report);
+      } catch (dbErr) {
+        logger.error('DREAM', 'Failed to persist dream cycle run record to database', {}, dbErr as Error);
+      }
     }
 
     return report;
