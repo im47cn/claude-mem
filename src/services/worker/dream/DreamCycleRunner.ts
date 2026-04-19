@@ -126,9 +126,13 @@ export class DreamCycleRunner {
       phases: {},
     };
 
-    const runId = this.recordStart();
+    // runId starts at 0; assigned inside try so recordComplete only runs if recordStart succeeded.
+    // The outer finally guarantees this.running=false even if recordStart() throws.
+    let runId = 0;
 
     try {
+      runId = this.recordStart();
+
       // Determine observation window
       const lastCycleTime = this.getLastDreamCycleTime();
       const sinceEpoch = lastCycleTime || 0; // 0 = process all observations on first run
@@ -175,10 +179,12 @@ export class DreamCycleRunner {
       logger.error('DREAM', 'Dream cycle failed', {}, error as Error);
     } finally {
       this.running = false;
-      try {
-        this.recordComplete(runId, report);
-      } catch (dbErr) {
-        logger.error('DREAM', 'Failed to persist dream cycle run record to database', {}, dbErr as Error);
+      if (runId > 0) {
+        try {
+          this.recordComplete(runId, report);
+        } catch (dbErr) {
+          logger.error('DREAM', 'Failed to persist dream cycle run record to database', {}, dbErr as Error);
+        }
       }
     }
 

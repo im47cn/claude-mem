@@ -20,6 +20,10 @@ const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models'
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 
+
+/** LLM request timeout — prevents dream cycle from hanging on slow/hung API calls */
+const LLM_TIMEOUT_MS = 30_000;
+
 /**
  * Gemini LLM provider - cheapest option, good for batch synthesis
  */
@@ -37,6 +41,7 @@ export class GeminiLLMProvider implements LLMProvider {
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(LLM_TIMEOUT_MS),
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: systemPrompt }] },
         contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
@@ -78,6 +83,7 @@ export class OpenRouterLLMProvider implements LLMProvider {
   async complete(systemPrompt: string, userPrompt: string): Promise<string | null> {
     const response = await fetch(OPENROUTER_API_URL, {
       method: 'POST',
+      signal: AbortSignal.timeout(LLM_TIMEOUT_MS),
       headers: {
         'Authorization': `Bearer ${this.apiKey}`,
         'Content-Type': 'application/json',
@@ -125,6 +131,7 @@ export class ClaudeLLMProvider implements LLMProvider {
   async complete(systemPrompt: string, userPrompt: string): Promise<string | null> {
     const response = await fetch(ANTHROPIC_API_URL, {
       method: 'POST',
+      signal: AbortSignal.timeout(LLM_TIMEOUT_MS),
       headers: {
         'x-api-key': this.apiKey,
         'anthropic-version': '2023-06-01',
