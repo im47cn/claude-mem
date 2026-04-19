@@ -89,6 +89,38 @@ Claude-mem is designed with a clean separation between open-source core function
 
 This architecture preserves the open-source nature of the project while enabling sustainable development through optional paid features.
 
+## Database Migration Architecture — CRITICAL
+
+There are **two migration systems** in this codebase. Knowing which one actually runs is essential.
+
+### Runtime path (Worker Service)
+
+```
+WorkerService → DatabaseManager → new SessionStore() → SessionStore constructor migrations
+```
+
+`SessionStore.ts` runs its **own** migration sequence in the constructor (lines ~51–68). Any new schema changes **must** be added here as a private method + call.
+
+### Secondary path (Hooks / NPX CLI)
+
+```
+Hooks / CLI → Database.ts → new MigrationRunner(db) → runAllMigrations()
+```
+
+`src/services/sqlite/migrations/runner.ts` handles this path. Add migrations here too for completeness, but it does **not** affect the worker's live database.
+
+### Adding a new migration — checklist
+
+1. Add private method to **`SessionStore.ts`** (always required for worker)
+2. Add call in `SessionStore` constructor sequence (after `addObservationModelColumns()`)
+3. Add same method to **`runner.ts`** + call in `runAllMigrations()` (for hook/CLI path)
+4. Use `INSERT OR IGNORE INTO schema_versions` to record the version number
+5. Guard with `PRAGMA table_info(...)` column existence checks to make it idempotent
+
+### Why the bundle doesn't show runner.ts migrations
+
+`worker-service.cjs` is built from `src/services/worker-service.ts` → `DatabaseManager` → `SessionStore`. The `MigrationRunner` class is included in the bundle from `Database.ts` imports, but its `runAllMigrations()` is **never called** at runtime in the worker path. Searching the bundle for SQL strings from runner.ts migrations will find nothing — this is expected.
+
 ## Important
 
 No need to edit the changelog ever, it's generated automatically.
