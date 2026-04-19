@@ -1,154 +1,276 @@
-import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
-import { Database } from 'bun:sqlite';
-import { DreamCycleRunner } from '../../../src/services/worker/dream/DreamCycleRunner.js';
+import { describe, it, expect, mock, beforeEach, afterEach, spyOn } from 'bun:test';
+import type { Request, Response } from 'express';
+import { logger } from '../../../src/utils/logger.js';
 
-/**
- * Helper: create minimal tables needed for DreamCycleRunner query methods.
- * Note: Full run() requires additional tables (FTS5, content_hash, etc.)
- * that are created by the migration runner. These tests focus on the
- * query/status methods that support the Manual API and Time-based trigger.
- */
-function createTestTables(db: Database): void {
-  db.exec(`
-    CREATE TABLE observations (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      memory_session_id TEXT NOT NULL,
-      project TEXT NOT NULL,
-      text TEXT,
-      type TEXT NOT NULL,
-      title TEXT,
-      subtitle TEXT,
-      facts TEXT,
-      narrative TEXT,
-      concepts TEXT,
-      files_read TEXT,
-      files_modified TEXT,
-      prompt_number INTEGER,
-      discovery_tokens INTEGER DEFAULT 0,
-      demoted INTEGER DEFAULT 0,
-      content_hash TEXT,
-      created_at TEXT NOT NULL,
-      created_at_epoch INTEGER NOT NULL
-    );
-    CREATE TABLE compiled_summaries (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      topic TEXT NOT NULL,
-      entity_type TEXT NOT NULL,
-      compiled_text TEXT NOT NULL,
-      confidence REAL DEFAULT 0.8,
-      observation_ids TEXT NOT NULL,
-      project TEXT,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
-    );
-    CREATE INDEX idx_compiled_topic ON compiled_summaries(topic);
-    CREATE INDEX idx_compiled_type ON compiled_summaries(entity_type);
-    CREATE INDEX idx_compiled_project ON compiled_summaries(project);
-    CREATE INDEX idx_compiled_updated ON compiled_summaries(updated_at);
-    CREATE TABLE dream_cycle_runs (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      started_at INTEGER NOT NULL,
-      completed_at INTEGER,
-      status TEXT NOT NULL DEFAULT 'running',
-      report TEXT,
-      observations_processed INTEGER DEFAULT 0
-    );
-    CREATE INDEX idx_dream_cycle_status ON dream_cycle_runs(status);
-    CREATE INDEX idx_dream_cycle_started ON dream_cycle_runs(started_at DESC);
-  `);
+// ---------------------------------------------------------------------------
+// Mock Justification:
+// - DreamCycleRunner: avoids real DB / LLM calls; we test HTTP handler logic only
+// - logger spies: suppress console output during tests
+// ---------------------------------------------------------------------------
+
+import { SynthesizeRoutes } from '../../../src/services/worker/http/routes/SynthesizeRoutes.js';
+import type { DreamCycleReport, DreamCycleRunRow } from '../../../src/services/worker/dream/types.js';
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function createRes(): { res: Partial<Response>; jsonSpy: ReturnType<typeof mock>; statusChain: { json: ReturnType<typeof mock> } } {
+  const statusChainJson = mock((_body: unknown) => {});
+  const statusChain = { json: statusChainJson };
+  const jsonSpy = mock((_body: unknown) => {});
+  const statusSpy = mock((_code: number) => statusChain);
+  const res: Partial<Response> = {
+    json: jsonSpy as unknown as Response['json'],
+    status: statusSpy as unknown as Response['status'],
+  };
+  return { res, jsonSpy, statusChain };
 }
 
-describe('DreamCycleRunner (Manual API + Time-based trigger)', () => {
-  let db: Database;
-  let runner: DreamCycleRunner;
+function createReq(body: unknown = {}): Partial<Request> {
+  return { body, path: '/api/synthesize', query: {} } as Partial<Request>;
+}
+
+function makeReport(overrides: Partial<DreamCycleReport> = {}): DreamCycleReport {
+  return {
+    startedAt: 1000,
+    completedAt: 2000,
+    status: 'completed',
+    phases: {
+      cluster: { observationsProcessed: 5, clustersFound: 2 },
+      compile: { created: 1, updated: 1, skipped: 0, errors: [] },
+      cleanup: { merged: 0, demoted: 1, flagged: 0 },
+      refresh: { fts5Rebuilt: true, compiledSummariesIndexed: 2 },
+    },
+    ...overrides,
+  };
+}
+
+function makeRunRow(overrides: Partial<DreamCycleRunRow> = {}): DreamCycleRunRow {
+  return {
+    id: 1,
+    started_at: 1000,
+    completed_at: 2000,
+    status: 'completed',
+    report: JSON.stringify({ status: 'completed' }),
+    observations_processed: 5,
+    ...overrides,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/synthesize
+// ---------------------------------------------------------------------------
+
+describe('POST /api/synthesize', () => {
+  let routes: SynthesizeRoutes;
+  let mockIsRunning: ReturnType<typeof mock>;
+  let mockRun: ReturnType<typeof mock>;
+  let loggerSpies: ReturnType<typeof spyOn>[];
 
   beforeEach(() => {
-    db = new Database(':memory:');
-    createTestTables(db);
-    runner = new DreamCycleRunner(db);
+    loggerSpies = [
+      spyOn(logger, 'info').mockImplementation(() => {}),
+      spyOn(logger, 'error').mockImplementation(() => {}),
+      spyOn(logger, 'debug').mockImplementation(() => {}),
+      spyOn(logger, 'warn').mockImplementation(() => {}),
+    ];
+
+    mockIsRunning = mock(() => false);
+    mockRun = mock(async () => makeReport());
+
+    const mockRunner = {
+      isRunning: mockIsRunning,
+      run: mockRun,
+      getLastRun: mock(() => null),
+    };
+
+    routes = new SynthesizeRoutes(mockRunner as any);
   });
 
   afterEach(() => {
-    db.close();
+    loggerSpies.forEach(s => s.mockRestore());
   });
 
-  describe('status queries', () => {
-    it('isRunning returns false initially', () => {
-      expect(runner.isRunning()).toBe(false);
-    });
+  it('returns 409 when a cycle is already running', async () => {
+    mockIsRunning.mockImplementation(() => true);
+    const req = createReq();
+    const { res, statusChain } = createRes();
 
-    it('getLastRun returns null when no runs exist', () => {
-      expect(runner.getLastRun()).toBeNull();
-    });
+    await (routes as any).handleSynthesize(req, res);
 
-    it('getLastDreamCycleTime returns 0 when no completed runs', () => {
-      expect(runner.getLastDreamCycleTime()).toBe(0);
-    });
-  });
-
-  describe('countObservationsSince', () => {
-    it('returns 0 on empty DB', () => {
-      expect(runner.countObservationsSince(0)).toBe(0);
-    });
-
-    it('counts non-demoted observations correctly', () => {
-      const now = Date.now();
-      db.run(
-        `INSERT INTO observations (memory_session_id, project, type, title, narrative, facts, concepts, demoted, created_at, created_at_epoch)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        ['sess-1', 'test', 'discovery', 'Test', 'Narrative', '[]', '[]', 0, new Date().toISOString(), now]
-      );
-      db.run(
-        `INSERT INTO observations (memory_session_id, project, type, title, narrative, facts, concepts, demoted, created_at, created_at_epoch)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        ['sess-1', 'test', 'discovery', 'Test 2', 'Narrative 2', '[]', '[]', 0, new Date().toISOString(), now + 1000]
-      );
-
-      expect(runner.countObservationsSince(0)).toBe(2);
-      expect(runner.countObservationsSince(now)).toBe(1);
-      expect(runner.countObservationsSince(now + 2000)).toBe(0);
-    });
-
-    it('excludes demoted observations', () => {
-      const now = Date.now();
-      db.run(
-        `INSERT INTO observations (memory_session_id, project, type, title, narrative, facts, concepts, demoted, created_at, created_at_epoch)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        ['sess-1', 'test', 'discovery', 'Active', 'Active obs', '[]', '[]', 0, new Date().toISOString(), now]
-      );
-      db.run(
-        `INSERT INTO observations (memory_session_id, project, type, title, narrative, facts, concepts, demoted, created_at, created_at_epoch)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        ['sess-1', 'test', 'discovery', 'Demoted', 'Demoted obs', '[]', '[]', 1, new Date().toISOString(), now + 1]
-      );
-
-      expect(runner.countObservationsSince(0)).toBe(1);
+    expect((res.status as ReturnType<typeof mock>).mock.calls[0][0]).toBe(409);
+    expect(statusChain.json.mock.calls[0][0]).toMatchObject({
+      success: false,
+      error: expect.stringContaining('already running'),
     });
   });
 
-  describe('dream_cycle_runs tracking', () => {
-    it('getLastRun returns most recent run', () => {
-      db.run(
-        `INSERT INTO dream_cycle_runs (started_at, completed_at, status, observations_processed)
-         VALUES (?, ?, ?, ?)`,
-        [Date.now() - 10000, Date.now() - 5000, 'completed', 25]
-      );
+  it('returns 200 with report when run completes successfully', async () => {
+    const report = makeReport();
+    mockRun.mockImplementation(async () => report);
 
-      const lastRun = runner.getLastRun();
-      expect(lastRun).not.toBeNull();
-      expect(lastRun!.status).toBe('completed');
-      expect(lastRun!.observations_processed).toBe(25);
+    const req = createReq();
+    const { res, jsonSpy } = createRes();
+
+    await (routes as any).handleSynthesize(req, res);
+
+    expect(mockRun).toHaveBeenCalled();
+    expect(jsonSpy).toHaveBeenCalled();
+    const body = jsonSpy.mock.calls[0][0] as any;
+    expect(body.success).toBe(true);
+    expect(body.report.status).toBe('completed');
+    expect(body.report.durationMs).toBe(1000); // completedAt - startedAt
+    expect(body.report.phases.cluster).toBeDefined();
+    expect(body.report.phases.compile).toBeDefined();
+  });
+
+  it('reports durationMs as null when completedAt is missing', async () => {
+    const report = makeReport({ completedAt: undefined });
+    mockRun.mockImplementation(async () => report);
+
+    const req = createReq();
+    const { res, jsonSpy } = createRes();
+
+    await (routes as any).handleSynthesize(req, res);
+
+    const body = jsonSpy.mock.calls[0][0] as any;
+    expect(body.report.durationMs).toBeNull();
+  });
+
+  it('returns 500 with error message when run() throws', async () => {
+    mockRun.mockImplementation(async () => {
+      throw new Error('LLM provider failed');
     });
 
-    it('getLastDreamCycleTime returns most recent completed time', () => {
-      const completedAt = Date.now() - 3600000;
-      db.run(
-        `INSERT INTO dream_cycle_runs (started_at, completed_at, status, observations_processed)
-         VALUES (?, ?, ?, ?)`,
-        [completedAt - 1000, completedAt, 'completed', 10]
-      );
+    const req = createReq();
+    const { res, statusChain } = createRes();
 
-      expect(runner.getLastDreamCycleTime()).toBe(completedAt);
+    await (routes as any).handleSynthesize(req, res);
+
+    expect((res.status as ReturnType<typeof mock>).mock.calls[0][0]).toBe(500);
+    expect(statusChain.json.mock.calls[0][0]).toMatchObject({
+      success: false,
+      error: 'LLM provider failed',
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/synthesize/status
+// ---------------------------------------------------------------------------
+
+describe('GET /api/synthesize/status', () => {
+  let routes: SynthesizeRoutes;
+  let mockIsRunning: ReturnType<typeof mock>;
+  let mockGetLastRun: ReturnType<typeof mock>;
+  let loggerSpies: ReturnType<typeof spyOn>[];
+
+  beforeEach(() => {
+    loggerSpies = [
+      spyOn(logger, 'info').mockImplementation(() => {}),
+      spyOn(logger, 'error').mockImplementation(() => {}),
+      spyOn(logger, 'debug').mockImplementation(() => {}),
+      spyOn(logger, 'warn').mockImplementation(() => {}),
+    ];
+
+    mockIsRunning = mock(() => false);
+    mockGetLastRun = mock(() => null);
+
+    const mockRunner = {
+      isRunning: mockIsRunning,
+      run: mock(async () => makeReport()),
+      getLastRun: mockGetLastRun,
+    };
+
+    routes = new SynthesizeRoutes(mockRunner as any);
+  });
+
+  afterEach(() => {
+    loggerSpies.forEach(s => s.mockRestore());
+  });
+
+  it('returns isRunning=false and lastRun=null when no runs have occurred', async () => {
+    mockGetLastRun.mockImplementation(() => null);
+
+    const req = createReq();
+    const { res, jsonSpy } = createRes();
+
+    await (routes as any).handleStatus(req, res);
+
+    const body = jsonSpy.mock.calls[0][0] as any;
+    expect(body.isRunning).toBe(false);
+    expect(body.lastRun).toBeNull();
+  });
+
+  it('returns isRunning=true when cycle is in progress', async () => {
+    mockIsRunning.mockImplementation(() => true);
+    mockGetLastRun.mockImplementation(() => null);
+
+    const req = createReq();
+    const { res, jsonSpy } = createRes();
+
+    await (routes as any).handleStatus(req, res);
+
+    const body = jsonSpy.mock.calls[0][0] as any;
+    expect(body.isRunning).toBe(true);
+  });
+
+  it('returns parsed report when lastRun has valid JSON report', async () => {
+    const reportData = { status: 'completed', phases: {} };
+    const row = makeRunRow({ report: JSON.stringify(reportData) });
+    mockGetLastRun.mockImplementation(() => row);
+
+    const req = createReq();
+    const { res, jsonSpy } = createRes();
+
+    await (routes as any).handleStatus(req, res);
+
+    const body = jsonSpy.mock.calls[0][0] as any;
+    expect(body.lastRun).not.toBeNull();
+    expect(body.lastRun.id).toBe(1);
+    expect(body.lastRun.status).toBe('completed');
+    expect(body.lastRun.report).toEqual(reportData);
+  });
+
+  it('returns null report when lastRun.report is null', async () => {
+    const row = makeRunRow({ report: null });
+    mockGetLastRun.mockImplementation(() => row);
+
+    const req = createReq();
+    const { res, jsonSpy } = createRes();
+
+    await (routes as any).handleStatus(req, res);
+
+    const body = jsonSpy.mock.calls[0][0] as any;
+    expect(body.lastRun.report).toBeNull();
+  });
+
+  // BUG EXPOSURE: JSON.parse(lastRun.report) has no try/catch.
+  //
+  // When the report column contains malformed JSON (e.g. truncated write,
+  // schema migration, or manual DB edit), JSON.parse throws a SyntaxError.
+  // The wrapHandler does NOT catch this because it only wraps the async
+  // function — and JSON.parse is synchronous inside an async fn, so it
+  // propagates as an unhandled rejection with no HTTP response sent.
+  //
+  // Fix: wrap JSON.parse in try/catch and fall back to null or raw string.
+  it('TODO(bug): returns graceful response when lastRun.report is malformed JSON', async () => {
+    const row = makeRunRow({ report: '{invalid json [[[' });
+    mockGetLastRun.mockImplementation(() => row);
+
+    const req = createReq();
+    const { res, jsonSpy } = createRes();
+
+    // BUG: currently throws SyntaxError and no response is sent
+    // The test expects a graceful response with report=null or raw string
+    await (routes as any).handleStatus(req, res);
+
+    // FAILS until bug is fixed (JSON.parse throws → no json() call)
+    expect(jsonSpy).toHaveBeenCalled();
+    const body = jsonSpy.mock.calls[0][0] as any;
+    expect(body.lastRun).not.toBeNull();
+    // Should degrade gracefully — report should be null or a safe fallback
+    expect(body.lastRun.report).toBeNull();
   });
 });

@@ -62,6 +62,7 @@ function inferEntityType(observations: ObservationForClustering[]): ObservationC
     case 'decision': return 'decision';
     case 'feature': return 'project';
     case 'discovery': return 'pattern';
+    case 'preference': return 'preference';
     case 'change': return 'pattern';
     default: return 'pattern';
   }

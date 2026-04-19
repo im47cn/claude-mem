@@ -41,56 +41,17 @@ function rebuildFTS5(db: Database): boolean {
 /**
  * Re-index compiled summaries in ChromaDB (if available)
  * This is best-effort — ChromaDB may not be configured
+ *
+ * TODO: ChromaSync does not yet have an API for indexing compiled_summaries
+ * (no syncSingleRecord static method exists). When ChromaSync is extended to
+ * support arbitrary document types, implement this function to embed compiled
+ * summaries for semantic search. Tracked as a separate work item.
  */
-async function reindexCompiledSummaries(db: Database): Promise<number> {
-  try {
-    // Dynamic import to avoid hard dependency on ChromaSync
-    const { ChromaSync } = await import('../../sync/ChromaSync.js');
-
-    // Get compiled summaries that were updated since last dream cycle
-    const summaries = db.query<{
-      id: number;
-      topic: string;
-      compiled_text: string;
-      project: string | null;
-    }, []>(
-      `SELECT id, topic, compiled_text, project FROM compiled_summaries
-       ORDER BY updated_at DESC
-       LIMIT 100`
-    ).all();
-
-    if (summaries.length === 0) return 0;
-
-    let indexed = 0;
-    for (const summary of summaries) {
-      try {
-        // Use ChromaSync to embed the compiled summary as a special observation
-        await ChromaSync.syncSingleRecord({
-          id: `compiled_${summary.id}`,
-          text: `[Compiled: ${summary.topic}] ${summary.compiled_text}`,
-          project: summary.project || 'global',
-          metadata: {
-            type: 'compiled_summary',
-            topic: summary.topic,
-            source_id: summary.id,
-          }
-        });
-        indexed++;
-      } catch (err) {
-        // Best-effort: skip individual failures
-        logger.debug('DREAM', `Failed to re-index compiled summary #${summary.id}`, {}, err as Error);
-      }
-    }
-
-    if (indexed > 0) {
-      logger.info('DREAM', `Re-indexed ${indexed} compiled summaries in ChromaDB`);
-    }
-    return indexed;
-  } catch {
-    // ChromaSync not available or not configured — skip silently
-    logger.debug('DREAM', 'ChromaDB not available, skipping compiled summary re-indexing');
-    return 0;
-  }
+async function reindexCompiledSummaries(_db: Database): Promise<number> {
+  // ChromaSync.syncSingleRecord does not exist — ChromaDB indexing of compiled
+  // summaries is not yet implemented. Skip silently.
+  logger.debug('DREAM', 'ChromaDB re-indexing of compiled summaries not yet implemented — skipping');
+  return 0;
 }
 
 /**

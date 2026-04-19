@@ -84,7 +84,10 @@ function demoteStaleObservations(
        AND o.demoted = 0
        AND NOT EXISTS (
          SELECT 1 FROM compiled_summaries cs
-         WHERE cs.observation_ids LIKE '%' || o.id || '%'
+         WHERE (cs.observation_ids LIKE '[' || o.id || ']'
+            OR cs.observation_ids LIKE '[' || o.id || ',%'
+            OR cs.observation_ids LIKE '%,' || o.id || ']'
+            OR cs.observation_ids LIKE '%,' || o.id || ',%')
        )`
   ).all(cutoff);
 

@@ -81,7 +81,7 @@ export class SynthesizeRoutes extends BaseRouteHandler {
         startedAt: lastRun.started_at,
         completedAt: lastRun.completed_at,
         observationsProcessed: lastRun.observations_processed,
-        report: lastRun.report ? JSON.parse(lastRun.report) : null,
+        report: lastRun.report ? (() => { try { return JSON.parse(lastRun.report!); } catch { return null; } })() : null,
       } : null,
     });
   });
