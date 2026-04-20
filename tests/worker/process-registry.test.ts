@@ -14,17 +14,24 @@ import {
  * Create a mock ChildProcess that behaves like a real one for testing.
  * Supports exitCode, killed, kill(), and event emission.
  */
-function createMockProcess(overrides: { exitCode?: number | null; killed?: boolean } = {}) {
+function createMockProcess(overrides: { exitCode?: number | null; signalCode?: string | null; killed?: boolean } = {}) {
   const emitter = new EventEmitter();
   const mock = Object.assign(emitter, {
     pid: Math.floor(Math.random() * 100000) + 1000,
     exitCode: overrides.exitCode ?? null,
+    signalCode: overrides.signalCode ?? null,
     killed: overrides.killed ?? false,
     kill(signal?: string) {
       mock.killed = true;
       // Simulate async exit after kill
       setTimeout(() => {
-        mock.exitCode = signal === 'SIGKILL' ? null : 0;
+        if (signal === 'SIGKILL') {
+          mock.exitCode = null;
+          mock.signalCode = 'SIGKILL';
+        } else {
+          mock.exitCode = 0;
+          mock.signalCode = null;
+        }
         mock.emit('exit', mock.exitCode, signal || 'SIGTERM');
       }, 10);
       return true;
@@ -133,6 +140,50 @@ describe('ProcessRegistry', () => {
 
       await ensureProcessExit({ pid: proc.pid, sessionDbId: 1, spawnedAt: Date.now(), process: proc as any });
       expect(getActiveCount()).toBe(0);
+    });
+
+    it('should unregister immediately if signalCode is set (signal-killed process)', async () => {
+      // When a process is killed by SIGTERM, Node.js sets exitCode=null, signalCode='SIGTERM'
+      // ensureProcessExit must recognize this as "already exited" and not wait 5s + SIGKILL
+      const proc = createMockProcess({ exitCode: null, signalCode: 'SIGTERM' });
+      registerProcess(proc.pid, 1, proc as any);
+
+      const start = Date.now();
+      await ensureProcessExit({ pid: proc.pid, sessionDbId: 1, spawnedAt: Date.now(), process: proc as any });
+      const elapsed = Date.now() - start;
+
+      expect(getActiveCount()).toBe(0);
+      // Should return nearly instantly, not wait for timeout
+      expect(elapsed).toBeLessThan(50);
+    });
+
+    it('should handle process that exits via signal during wait (race condition)', async () => {
+      // Simulate: process receives SIGTERM and exits with signalCode after 30ms
+      // ensureProcessExit should detect the exit via the 'exit' event, not timeout
+      const proc = createMockProcess();
+      registerProcess(proc.pid, 1, proc as any);
+
+      // Override kill: simulate signal exit (exitCode=null, signalCode=SIGTERM)
+      proc.kill = (signal?: string) => {
+        proc.killed = true;
+        setTimeout(() => {
+          proc.signalCode = signal || 'SIGTERM';
+          // exitCode stays null — this is the key behavior for signal exits
+          proc.emit('exit', null, signal || 'SIGTERM');
+        }, 30);
+        return true;
+      };
+
+      // Trigger SIGTERM externally after 20ms (simulating SDK abort)
+      setTimeout(() => proc.kill('SIGTERM'), 20);
+
+      const start = Date.now();
+      await ensureProcessExit({ pid: proc.pid, sessionDbId: 1, spawnedAt: Date.now(), process: proc as any }, 5000);
+      const elapsed = Date.now() - start;
+
+      expect(getActiveCount()).toBe(0);
+      // Should complete in ~50ms (20ms wait + 30ms exit), not 5000ms timeout
+      expect(elapsed).toBeLessThan(500);
     });
 
     it('should NOT treat proc.killed as exited — must wait for actual exit', async () => {

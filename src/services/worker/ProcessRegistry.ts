@@ -163,32 +163,53 @@ export function getActiveProcesses(): Array<{ pid: number; sessionDbId: number; 
 }
 
 /**
+ * Check if a process has exited (by exit code OR signal).
+ *
+ * Node.js ChildProcess sets exitCode when the process exits normally,
+ * but when killed by a signal (e.g. SIGTERM), exitCode remains null
+ * and signalCode is set instead. We must check both.
+ */
+function hasExited(proc: ChildProcess): boolean {
+  return proc.exitCode !== null || proc.signalCode !== null;
+}
+
+/**
  * Wait for a process to exit with timeout, escalating to SIGKILL if needed
  * Uses event-based waiting instead of polling to avoid CPU overhead
  */
 export async function ensureProcessExit(tracked: TrackedProcess, timeoutMs: number = 5000): Promise<void> {
   const { pid, process: proc } = tracked;
 
-  // Already exited? Only trust exitCode, NOT proc.killed
-  // proc.killed only means Node sent a signal — the process can still be alive
-  if (proc.exitCode !== null) {
+  // Already exited? Check both exitCode AND signalCode.
+  // When a process is killed by a signal (e.g. SIGTERM), exitCode is null
+  // but signalCode is set (e.g. 'SIGTERM'). Both indicate the process is dead.
+  if (hasExited(proc)) {
+    unregisterProcess(pid);
+    return;
+  }
+
+  // IMPORTANT: Register the exit listener BEFORE the state re-check to prevent
+  // a race condition where the process exits between our check and listener
+  // registration, causing the 'exit' event to be lost forever.
+  const exitPromise = new Promise<void>((resolve) => {
+    proc.once('exit', () => resolve());
+  });
+
+  // Re-check after registering listener (closes the race window)
+  if (hasExited(proc)) {
     unregisterProcess(pid);
     return;
   }
 
   // Wait for graceful exit with timeout using event-based approach
-  const exitPromise = new Promise<void>((resolve) => {
-    proc.once('exit', () => resolve());
-  });
-
   const timeoutPromise = new Promise<void>((resolve) => {
     setTimeout(resolve, timeoutMs);
   });
 
   await Promise.race([exitPromise, timeoutPromise]);
 
-  // Check if exited gracefully — only trust exitCode
-  if (proc.exitCode !== null) {
+  // Check if exited gracefully — check both exitCode and signalCode
+  if (hasExited(proc)) {
     unregisterProcess(pid);
     return;
   }
@@ -386,7 +407,7 @@ export function createPidCapturingSpawn(sessionDbId: number) {
     // Multiple processes sharing the same --resume UUID waste API credits and
     // can conflict with each other (Issue #1590).
     const existing = getProcessBySession(sessionDbId);
-    if (existing && existing.process.exitCode === null) {
+    if (existing && !hasExited(existing.process)) {
       logger.warn('PROCESS', `Killing duplicate process PID ${existing.pid} before spawning new one for session ${sessionDbId}`, {
         existingPid: existing.pid,
         sessionDbId
@@ -394,7 +415,7 @@ export function createPidCapturingSpawn(sessionDbId: number) {
       let exited = false;
       try {
         existing.process.kill('SIGTERM');
-        exited = existing.process.exitCode !== null;
+        exited = hasExited(existing.process);
       } catch (error: unknown) {
         // Already dead — safe to unregister immediately
         if (error instanceof Error) {
