@@ -285,3 +285,48 @@ export interface UserPromptSearchResult extends UserPromptRow {
   rank?: number; // FTS5 relevance score (lower is better)
   score?: number; // Normalized score (higher is better, 0-1)
 }
+
+
+// ---------------------------------------------------------------------------
+// Compiled Summaries (Compiled Truth Synthesis Layer)
+// ---------------------------------------------------------------------------
+
+/** Entity type for compiled summaries — maps to observation type families */
+export type CompiledSummaryEntityType = 'preference' | 'pattern' | 'decision' | 'project' | 'tool' | 'architecture' | 'workflow' | 'general';
+
+/**
+ * A row from the compiled_summaries table.
+ * Uses epoch ms for created_at and updated_at (matching existing schema).
+ */
+export interface CompiledSummaryRow {
+  id: number;
+  topic: string;
+  entity_type: CompiledSummaryEntityType;
+  compiled_text: string;
+  confidence: number;
+  /** JSON-encoded number[] of source observation IDs */
+  observation_ids: string;
+  observation_count: number;
+  project: string | null;
+  /** 0 = fresh, 1 = stale (needs recompilation) */
+  is_stale: number;
+  /** Creation time as epoch ms */
+  created_at: number;
+  /** Last update time as epoch ms */
+  updated_at: number;
+}
+
+/** Input for creating a new compiled summary */
+export interface CompiledSummaryInput {
+  topic: string;
+  entity_type: CompiledSummaryEntityType;
+  compiled_text: string;
+  confidence?: number;
+  observation_ids: number[];
+  project?: string;
+}
+
+/** Result from compiled summary search operations */
+export interface CompiledSummarySearchResult extends CompiledSummaryRow {
+  score?: number;
+}

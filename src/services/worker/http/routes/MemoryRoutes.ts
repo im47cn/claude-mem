@@ -13,7 +13,8 @@ import type { DatabaseManager } from '../../DatabaseManager.js';
 export class MemoryRoutes extends BaseRouteHandler {
   constructor(
     private dbManager: DatabaseManager,
-    private defaultProject: string
+    private defaultProject: string,
+    private onObservationStored?: () => void
   ) {
     super();
   }
@@ -68,7 +69,10 @@ export class MemoryRoutes extends BaseRouteHandler {
       title: observation.title
     });
 
-    // 4. Sync to ChromaDB (async, fire-and-forget)
+    // 4. Notify threshold compilation trigger (fire-and-forget)
+    this.onObservationStored?.();
+
+    // 5. Sync to ChromaDB (async, fire-and-forget)
     chromaSync.syncObservation(
       result.id,
       memorySessionId,
@@ -81,7 +85,7 @@ export class MemoryRoutes extends BaseRouteHandler {
       logger.error('CHROMA', 'ChromaDB sync failed', { id: result.id }, err as Error);
     });
 
-    // 5. Return success
+    // 6. Return success
     res.json({
       success: true,
       id: result.id,

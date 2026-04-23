@@ -81,6 +81,9 @@ import { OpenRouterAgent, isOpenRouterSelected, isOpenRouterAvailable } from './
 import { PaginationHelper } from './worker/PaginationHelper.js';
 import { SettingsManager } from './worker/SettingsManager.js';
 import { SearchManager } from './worker/SearchManager.js';
+import { CompiledSummaryStore } from './worker/search/compiled-summaries.js';
+import { ThresholdTrigger } from './worker/dream/threshold-trigger.js';
+import { DreamCycleRunner } from './worker/dream/DreamCycleRunner.js';
 import { FormattingService } from './worker/FormattingService.js';
 import { TimelineService } from './worker/TimelineService.js';
 import { SessionEventBroadcaster } from './worker/events/SessionEventBroadcaster.js';
@@ -96,6 +99,8 @@ import { SettingsRoutes } from './worker/http/routes/SettingsRoutes.js';
 import { LogsRoutes } from './worker/http/routes/LogsRoutes.js';
 import { MemoryRoutes } from './worker/http/routes/MemoryRoutes.js';
 import { CorpusRoutes } from './worker/http/routes/CorpusRoutes.js';
+import { SynthesizeRoutes } from './worker/http/routes/SynthesizeRoutes.js';
+import { CompiledRoutes } from './worker/http/routes/CompiledRoutes.js';
 
 // Knowledge agent services
 import { CorpusStore } from './worker/knowledge/CorpusStore.js';
@@ -150,6 +155,9 @@ export class WorkerService {
   private settingsManager: SettingsManager;
   private sessionEventBroadcaster: SessionEventBroadcaster;
   private corpusStore: CorpusStore;
+  private thresholdTrigger: ThresholdTrigger | null = null;
+  private dreamCycleRunner: DreamCycleRunner | null = null;
+  private dreamCycleInterval: ReturnType<typeof setInterval> | null = null;
 
   // Route handlers
   private searchRoutes: SearchRoutes | null = null;
@@ -301,7 +309,7 @@ export class WorkerService {
     this.server.registerRoutes(new DataRoutes(this.paginationHelper, this.dbManager, this.sessionManager, this.sseBroadcaster, this, this.startTime));
     this.server.registerRoutes(new SettingsRoutes(this.settingsManager));
     this.server.registerRoutes(new LogsRoutes());
-    this.server.registerRoutes(new MemoryRoutes(this.dbManager, 'claude-mem'));
+    this.server.registerRoutes(new MemoryRoutes(this.dbManager, 'claude-mem', () => this.thresholdTrigger?.notify()));
   }
 
   /**
@@ -392,6 +400,48 @@ export class WorkerService {
         formattingService,
         timelineService
       );
+      // Initialize compiled summaries store (GBrain Compiled Truth pattern)
+      const compiledStore = new CompiledSummaryStore(this.dbManager.getSessionStore().db);
+      searchManager.setCompiledStore(compiledStore);
+
+      // Initialize threshold-based compilation trigger
+      this.thresholdTrigger = new ThresholdTrigger(this.dbManager.getSessionStore().db);
+      logger.info('WORKER', 'ThresholdTrigger initialized (auto-compile when 5+ observations cluster)');
+
+      // Initialize Dream Cycle runner and time-based trigger (every 6 hours)
+      this.dreamCycleRunner = new DreamCycleRunner(this.dbManager.getSessionStore().db);
+      const DREAM_CYCLE_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 hours
+      this.dreamCycleInterval = setInterval(async () => {
+        try {
+          if (this.dreamCycleRunner?.isRunning()) {
+            logger.debug('DREAM', 'Skipping scheduled dream cycle — already running');
+            return;
+          }
+          const minObservations = 10;
+          const count = this.dreamCycleRunner!.countObservationsSince(
+            this.dreamCycleRunner!.getLastDreamCycleTime()
+          );
+          if (count < minObservations) {
+            logger.debug('DREAM', `Skipping scheduled dream cycle — only ${count} new observations (need ${minObservations})`);
+            return;
+          }
+          logger.info('DREAM', `Starting scheduled dream cycle (${count} new observations)`);
+          const report = await this.dreamCycleRunner!.run();
+          logger.info('DREAM', `Scheduled dream cycle completed: ${report.status}`);
+        } catch (e) {
+          logger.error('DREAM', 'Scheduled dream cycle failed', {}, e as Error);
+        }
+      }, DREAM_CYCLE_INTERVAL_MS);
+      logger.info('WORKER', 'Dream Cycle timer started (runs every 6 hours)');
+
+      // Register manual synthesis API endpoint
+      this.server.registerRoutes(new SynthesizeRoutes(this.dreamCycleRunner));
+      logger.info('WORKER', 'SynthesizeRoutes registered (POST /api/synthesize)');
+
+      // Register compiled summaries API endpoints
+      this.server.registerRoutes(new CompiledRoutes(() => this.dbManager.getSessionStore().db));
+      logger.info('WORKER', 'CompiledRoutes registered (GET/POST /api/compiled-summaries)');
+
       this.searchRoutes = new SearchRoutes(searchManager);
       this.server.registerRoutes(this.searchRoutes);
       logger.info('WORKER', 'SearchManager initialized and search routes registered');
@@ -977,6 +1027,18 @@ export class WorkerService {
       this.staleSessionReaperInterval = null;
     }
 
+    // Dispose threshold trigger (cancel pending debounced checks)
+    if (this.thresholdTrigger) {
+      this.thresholdTrigger.dispose();
+      this.thresholdTrigger = null;
+    }
+
+    // Stop dream cycle timer
+    if (this.dreamCycleInterval) {
+      clearInterval(this.dreamCycleInterval);
+      this.dreamCycleInterval = null;
+    }
+
     await performGracefulShutdown({
       server: this.server.getHttpServer(),
       sessionManager: this.sessionManager,
@@ -989,6 +1051,14 @@ export class WorkerService {
   /**
    * Broadcast processing status change to SSE clients
    */
+  /**
+   * Notify the threshold-based compilation trigger after observations are stored.
+   * Called by ResponseProcessor via the WorkerRef interface.
+   */
+  notifyThresholdTrigger(): void {
+    this.thresholdTrigger?.notify();
+  }
+
   broadcastProcessingStatus(): void {
     const queueDepth = this.sessionManager.getTotalActiveWork();
     const isProcessing = queueDepth > 0;

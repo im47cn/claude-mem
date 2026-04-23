@@ -118,3 +118,48 @@ export interface CombinedResult {
   epoch: number;
   created_at: string;
 }
+
+/**
+ * Compiled Summary - Synthesized knowledge from multiple observations
+ * Implements GBrain's "Compiled Truth + Timeline" pattern.
+ *
+ * The compiled_text is REWRITTEN (not appended) when new evidence arrives.
+ * observation_ids provides full traceability to the source observations.
+ */
+export interface CompiledSummaryRow {
+  id: number;
+  topic: string;
+  entity_type: 'preference' | 'pattern' | 'decision' | 'project' | 'tool';
+  compiled_text: string;
+  confidence: number;
+  observation_ids: string; // JSON array of observation IDs
+  project: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface CompiledSummaryInput {
+  topic: string;
+  entity_type: CompiledSummaryRow['entity_type'];
+  compiled_text: string;
+  confidence?: number;
+  observation_ids: number[];
+  project?: string;
+}
+
+export interface CompiledSummarySearchResult extends CompiledSummaryRow {
+  observation_count: number;
+  score?: number;
+}
+
+/**
+ * Result from the Synthesizer - ready for CompiledSummaryStore.upsert()
+ */
+export interface SynthesizerResult {
+  compiled_text: string;
+  confidence: number;
+  observation_ids: number[];
+  topic: string;
+  entity_type: CompiledSummaryRow['entity_type'];
+  project?: string;
+}

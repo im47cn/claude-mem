@@ -23,6 +23,8 @@ export interface WorkerRef {
     broadcast(event: SSEEventPayload): void;
   };
   broadcastProcessingStatus?: () => void;
+  /** Notify threshold-based compilation trigger after observations are stored */
+  notifyThresholdTrigger?: () => void;
 }
 
 // ============================================================================

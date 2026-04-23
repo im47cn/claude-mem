@@ -138,6 +138,11 @@ export async function processAgentResponse(
   // Clear the tracking array after confirmation
   session.processingMessageIds = [];
 
+  // Notify threshold-based compilation trigger (fire-and-forget)
+  if (result.observationIds.length > 0) {
+    worker?.notifyThresholdTrigger?.();
+  }
+
   // AFTER transaction commits - async operations (can fail safely without data loss)
   await syncAndBroadcastObservations(
     observations,

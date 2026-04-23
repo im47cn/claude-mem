@@ -28,13 +28,17 @@ import { ModeManager } from '../domain/ModeManager.js';
 import {
   SearchOrchestrator,
   TimelineBuilder,
-  SEARCH_CONSTANTS
+  SEARCH_CONSTANTS,
+  dedupResults,
+  CompiledSummaryStore
 } from './search/index.js';
-import type { TimelineData } from './search/index.js';
+import type { TimelineData, DedupOptions, CompiledSummarySearchResult } from './search/index.js';
+import { SettingsDefaultsManager } from '../../shared/SettingsDefaultsManager.js';
 
 export class SearchManager {
   private orchestrator: SearchOrchestrator;
   private timelineBuilder: TimelineBuilder;
+  private compiledStore: CompiledSummaryStore | null = null;
 
   constructor(
     private sessionSearch: SessionSearch,
@@ -50,6 +54,15 @@ export class SearchManager {
       chromaSync
     );
     this.timelineBuilder = new TimelineBuilder();
+  }
+
+  /**
+   * Initialize compiled summary store for synthesized knowledge queries.
+   * Called by worker-service after DB is ready.
+   */
+  setCompiledStore(store: CompiledSummaryStore): void {
+    this.compiledStore = store;
+    this.orchestrator.setCompiledStore(store);
   }
 
   /**
@@ -262,7 +275,39 @@ export class SearchManager {
       prompts = [];
     }
 
-    const totalResults = observations.length + sessions.length + prompts.length;
+    // Apply dedup pipeline to observations (project diversity + session cap)
+    if (observations.length > 1 && SettingsDefaultsManager.getBool('CLAUDE_MEM_SEARCH_DEDUP_ENABLED')) {
+      const beforeCount = observations.length;
+      const dedupOpts: DedupOptions = {
+        maxProjectRatio: parseFloat(SettingsDefaultsManager.get('CLAUDE_MEM_SEARCH_DEDUP_MAX_PROJECT_RATIO')),
+        maxPerSession: SettingsDefaultsManager.getInt('CLAUDE_MEM_SEARCH_DEDUP_MAX_PER_SESSION'),
+      };
+      observations = dedupResults(observations, dedupOpts);
+      if (observations.length < beforeCount) {
+        logger.debug('SEARCH', 'Dedup pipeline reduced observations', {
+          before: beforeCount,
+          after: observations.length,
+          dropped: beforeCount - observations.length,
+        });
+      }
+    }
+
+    // Query compiled summaries (synthesized knowledge, ~10x fewer tokens)
+    let compiledSummaries: CompiledSummarySearchResult[] = [];
+    if (this.compiledStore && query) {
+      compiledSummaries = this.compiledStore.searchByText(query, {
+        project: options.project,
+        limit: 5,
+      });
+      if (compiledSummaries.length > 0) {
+        logger.debug('SEARCH', 'Found compiled summaries', {
+          count: compiledSummaries.length,
+          topics: compiledSummaries.map(s => s.topic),
+        });
+      }
+    }
+
+    const totalResults = observations.length + sessions.length + prompts.length + compiledSummaries.length;
 
     // JSON format: return raw data for programmatic access (e.g., export scripts)
     if (format === 'json') {
@@ -270,6 +315,7 @@ export class SearchManager {
         observations,
         sessions,
         prompts,
+        compiledSummaries,
         totalResults,
         query: query || ''
       };
@@ -337,8 +383,21 @@ export class SearchManager {
 
     // Build output with date/file grouping
     const lines: string[] = [];
-    lines.push(`Found ${totalResults} result(s) matching "${query}" (${observations.length} obs, ${sessions.length} sessions, ${prompts.length} prompts)`);
+    lines.push(`Found ${totalResults} result(s) matching "${query}" (${observations.length} obs, ${sessions.length} sessions, ${prompts.length} prompts${compiledSummaries.length > 0 ? `, ${compiledSummaries.length} compiled` : ''})`);
     lines.push('');
+
+    // Render compiled summaries first (synthesized knowledge, preferred over raw observations)
+    if (compiledSummaries.length > 0) {
+      lines.push('### Compiled Knowledge');
+      lines.push('');
+      for (const cs of compiledSummaries) {
+        const obsCount = cs.observation_count;
+        const conf = Math.round(cs.confidence * 100);
+        lines.push(`**${cs.topic}** (${cs.entity_type}, ${obsCount} sources, ${conf}% confidence)`);
+        lines.push(cs.compiled_text);
+        lines.push('');
+      }
+    }
 
     for (const [day, dayResults] of resultsByDate) {
       lines.push(`### ${day}`);
